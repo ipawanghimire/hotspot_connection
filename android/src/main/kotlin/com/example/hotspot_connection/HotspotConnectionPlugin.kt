@@ -11,6 +11,7 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.EventChannel
+import org.json.JSONObject
 import java.net.ServerSocket
 import java.net.Socket
 import java.io.PrintWriter
@@ -38,7 +39,9 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
   private val mainHandler = Handler(Looper.getMainLooper())
   
   private val discoveredServices = mutableMapOf<String, NsdServiceInfo>()
-  private val socketLock = Any() // Ensure thread-safety for active sockets
+  private val socketLock = Any() 
+  private var myPeerId: String = ""
+  private var myPeerName: String = ""
 
   override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     context = flutterPluginBinding.applicationContext
@@ -72,8 +75,9 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
     when (call.method) {
       "getPlatformVersion" -> { result.success("Android ${android.os.Build.VERSION.RELEASE}") }
       "startBroadcasting" -> {
-        val username = call.argument<String>("username") ?: "Unknown"
-        startBroadcasting(username)
+        myPeerName = call.argument<String>("username") ?: "Unknown"
+        myPeerId = call.argument<String>("peerId") ?: "peer_${System.currentTimeMillis()}"
+        startBroadcasting()
         result.success(null)
       }
       "startDiscovery" -> {
@@ -86,8 +90,7 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
       }
       "createRoom" -> {
         val deviceIds = call.argument<List<String>>("deviceIds") ?: emptyList()
-        createRoom(deviceIds)
-        result.success(null)
+        createRoom(deviceIds, result)
       }
       "sendMessage" -> {
         val message = call.argument<String>("message") ?: ""
@@ -100,7 +103,7 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
     }
   }
 
-  private fun startBroadcasting(username: String) {
+  private fun startBroadcasting() {
     serverSocket = ServerSocket(0)
     val port = serverSocket!!.localPort
 
@@ -110,7 +113,10 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
                 val socket = serverSocket!!.accept()
                 synchronized(socketLock) { activeSockets.add(socket) }
                 mainHandler.post {
-                    roomEventSink?.success(mapOf("type" to "connected"))
+                    roomEventSink?.success(mapOf(
+                        "type" to "connected",
+                        "peerId" to "unknown"
+                    ))
                 }
                 listenToSocket(socket)
             }
@@ -120,9 +126,13 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
     }
 
     val serviceInfo = NsdServiceInfo().apply {
-        serviceName = username
+        serviceName = myPeerId // OS ensures uniqueness natively
         serviceType = SERVICE_TYPE
         this.port = port
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            setAttribute("id", myPeerId)
+            setAttribute("name", myPeerName)
+        }
     }
 
     registrationListener = object : NsdManager.RegistrationListener {
@@ -142,11 +152,23 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
             if (service.serviceType == SERVICE_TYPE) {
                 nsdManager.resolveService(service, object : NsdManager.ResolveListener {
                     override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
-                    override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                        val name = serviceInfo.serviceName
-                        discoveredServices[name] = serviceInfo
+                    override fun onServiceResolved(resolvedService: NsdServiceInfo) {
+                        var id = resolvedService.serviceName
+                        var name = "Unknown"
+                        
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                            resolvedService.attributes["id"]?.let { id = String(it) }
+                            resolvedService.attributes["name"]?.let { name = String(it) }
+                        }
+                        
+                        discoveredServices[id] = resolvedService
+                        
                         mainHandler.post {
-                            discoveryEventSink?.success(name)
+                            discoveryEventSink?.success(mapOf(
+                                "id" to id,
+                                "name" to name,
+                                "host" to resolvedService.host?.hostAddress
+                            ))
                         }
                     }
                 })
@@ -172,7 +194,13 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
     }
   }
 
-  private fun createRoom(deviceIds: List<String>) {
+  private fun createRoom(deviceIds: List<String>, result: Result) {
+    val connected = mutableListOf<Map<String, String>>()
+    val failed = mutableListOf<String>()
+    
+    val targetCount = deviceIds.size
+    var completedCount = 0
+
     deviceIds.forEach { deviceId ->
         val service = discoveredServices[deviceId]
         if (service != null && service.host != null) {
@@ -180,13 +208,50 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
                 try {
                     val socket = Socket(service.host, service.port)
                     synchronized(socketLock) { activeSockets.add(socket) }
-                    mainHandler.post {
-                        roomEventSink?.success(mapOf("type" to "connected"))
+                    
+                    var name = "Unknown"
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        service.attributes["name"]?.let { name = String(it) }
                     }
+
+                    val peerInfo = mapOf(
+                        "id" to deviceId,
+                        "name" to name,
+                        "host" to service.host.hostAddress
+                    )
+
+                    mainHandler.post {
+                        roomEventSink?.success(mapOf(
+                            "type" to "connected",
+                            "peer" to peerInfo
+                        ))
+                    }
+                    
+                    connected.add(peerInfo as Map<String, String>)
                     listenToSocket(socket)
                 } catch (e: Exception) {
                     e.printStackTrace()
+                    failed.add(deviceId)
+                } finally {
+                    completedCount++
+                    if (completedCount == targetCount) {
+                        mainHandler.post {
+                            result.success(mapOf(
+                                "connected" to connected,
+                                "failed" to failed
+                            ))
+                        }
+                    }
                 }
+            }
+        } else {
+            failed.add(deviceId)
+            completedCount++
+            if (completedCount == targetCount) {
+                result.success(mapOf(
+                    "connected" to connected,
+                    "failed" to failed
+                ))
             }
         }
     }
@@ -197,33 +262,42 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
         try {
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             while (true) {
-                val message = reader.readLine() ?: break
-                
-                mainHandler.post {
-                    roomEventSink?.success(mapOf("type" to "message", "data" to message))
-                }
+                val jsonString = reader.readLine() ?: break
+                try {
+                    val json = JSONObject(jsonString)
+                    val type = json.optString("type")
+                    val peerId = json.optString("peerId")
+                    val data = json.optString("data")
 
-                // If HOST receives a message, relay it to all OTHER active clients
-                // to support full chat room functionality
-                val others = synchronized(socketLock) { activeSockets.filter { it != socket } }
-                if (others.isNotEmpty()) {
-                    others.forEach { otherSocket ->
-                        thread {
-                            try {
-                                val out = PrintWriter(otherSocket.getOutputStream(), true)
-                                out.println(message)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
+                    mainHandler.post {
+                        roomEventSink?.success(mapOf(
+                            "type" to type,
+                            "peerId" to peerId,
+                            "data" to data
+                        ))
+                    }
+
+                    // Relay to others if host
+                    val others = synchronized(socketLock) { activeSockets.filter { it != socket } }
+                    if (others.isNotEmpty()) {
+                        others.forEach { otherSocket ->
+                            thread {
+                                try {
+                                    val out = PrintWriter(otherSocket.getOutputStream(), true)
+                                    out.println(jsonString)
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
                             }
                         }
                     }
-                }
+                } catch (e:Exception) {}
             }
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
             mainHandler.post {
-                roomEventSink?.success(mapOf("type" to "disconnected"))
+                roomEventSink?.success(mapOf("type" to "disconnected", "peerId" to "unknown")) // OS doesn't easily expose this from raw socket without custom handshakes
             }
             synchronized(socketLock) { activeSockets.remove(socket) }
         }
@@ -231,12 +305,18 @@ class HotspotConnectionPlugin: FlutterPlugin, MethodCallHandler {
   }
 
   private fun sendMessage(message: String) {
+    val payload = JSONObject()
+    payload.put("type", "message")
+    payload.put("peerId", myPeerId)
+    payload.put("data", message)
+    val stringPayload = payload.toString()
+
     val sockets = synchronized(socketLock) { activeSockets.toList() }
     sockets.forEach { socket ->
         thread {
             try {
                 val out = PrintWriter(socket.getOutputStream(), true)
-                out.println(message)
+                out.println(stringPayload)
             } catch (e: Exception) {
                 e.printStackTrace()
             }

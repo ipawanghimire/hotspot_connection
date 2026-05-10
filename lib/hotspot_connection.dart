@@ -1,12 +1,30 @@
+import 'dart:math';
 import 'hotspot_connection_platform_interface.dart';
+import 'models/peer.dart';
+import 'models/room_event.dart';
+import 'models/room_result.dart';
+
+export 'models/peer.dart';
+export 'models/room_event.dart';
+export 'models/room_result.dart';
 
 class HotspotConnection {
+  String? _myPeerId;
+
+  String get myPeerId {
+    if (_myPeerId == null) {
+      final random = Random();
+      _myPeerId = 'peer_${DateTime.now().millisecondsSinceEpoch}_${random.nextInt(10000)}';
+    }
+    return _myPeerId!;
+  }
+
   Future<String?> getPlatformVersion() {
     return HotspotConnectionPlatform.instance.getPlatformVersion();
   }
 
   Future<void> startBroadcasting(String username) {
-    return HotspotConnectionPlatform.instance.startBroadcasting(username);
+    return HotspotConnectionPlatform.instance.startBroadcasting(username, myPeerId);
   }
 
   Future<void> startDiscovery() {
@@ -17,7 +35,7 @@ class HotspotConnection {
     return HotspotConnectionPlatform.instance.stopDiscovery();
   }
 
-  Future<void> createRoom(List<String> deviceIds) {
+  Future<RoomResult> createRoom(List<String> deviceIds) {
     return HotspotConnectionPlatform.instance.createRoom(deviceIds);
   }
 
@@ -25,11 +43,11 @@ class HotspotConnection {
     return HotspotConnectionPlatform.instance.sendMessage(message);
   }
 
-  Stream<String> get discoveryEvents {
+  Stream<Peer> get discoveryEvents {
     return HotspotConnectionPlatform.instance.discoveryEvents;
   }
 
-  Stream<Map<String, dynamic>> get roomEvents {
+  Stream<RoomEvent> get roomEvents {
     return HotspotConnectionPlatform.instance.roomEvents;
   }
 }

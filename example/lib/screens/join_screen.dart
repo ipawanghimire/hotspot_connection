@@ -14,7 +14,7 @@ class _JoinScreenState extends State<JoinScreen> {
   final _hotspotConnectionPlugin = HotspotConnection();
   final _nameController = TextEditingController();
   bool _isBroadcasting = false;
-  StreamSubscription? _roomSub;
+  StreamSubscription<RoomEvent>? _roomSub;
 
   @override
   void dispose() {
@@ -34,7 +34,7 @@ class _JoinScreenState extends State<JoinScreen> {
 
     // Listen for room creation/connection from host
     _roomSub = _hotspotConnectionPlugin.roomEvents.listen((event) {
-      if (event['type'] == 'connected') {
+      if (event is PeerJoinedEvent) {
         if (!mounted) return;
         Navigator.pushReplacement(
           context,

@@ -12,10 +12,10 @@ class HostScreen extends StatefulWidget {
 
 class _HostScreenState extends State<HostScreen> {
   final _hotspotConnectionPlugin = HotspotConnection();
-  final List<String> _discoveredDevices = [];
-  final List<String> _selectedDevices = [];
+  final List<Peer> _discoveredDevices = [];
+  final List<String> _selectedDeviceIds = [];
   final _hostNameController = TextEditingController(text: 'Host');
-  StreamSubscription? _discoverySub;
+  StreamSubscription<Peer>? _discoverySub;
 
   @override
   void initState() {
@@ -25,10 +25,10 @@ class _HostScreenState extends State<HostScreen> {
 
   void _startDiscovery() async {
     await _hotspotConnectionPlugin.startDiscovery();
-    _discoverySub = _hotspotConnectionPlugin.discoveryEvents.listen((device) {
-      if (!_discoveredDevices.contains(device)) {
+    _discoverySub = _hotspotConnectionPlugin.discoveryEvents.listen((peer) {
+      if (!_discoveredDevices.any((d) => d.id == peer.id)) {
         setState(() {
-          _discoveredDevices.add(device);
+          _discoveredDevices.add(peer);
         });
       }
     });
@@ -43,12 +43,18 @@ class _HostScreenState extends State<HostScreen> {
   }
 
   void _createRoom() async {
-    if (_selectedDevices.isEmpty) return;
+    if (_selectedDeviceIds.isEmpty) return;
     final hostName = _hostNameController.text.trim().isEmpty
         ? 'Host'
         : _hostNameController.text.trim();
-    await _hotspotConnectionPlugin.createRoom(_selectedDevices);
-    if (!mounted) return;
+    final result = await _hotspotConnectionPlugin.createRoom(
+      _selectedDeviceIds,
+    );
+    if (!mounted || !result.isSuccess) {
+      // Example: Handle creation failure if list of connected is empty
+      return;
+    }
+
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
@@ -82,9 +88,10 @@ class _HostScreenState extends State<HostScreen> {
               itemCount: _discoveredDevices.length,
               itemBuilder: (context, index) {
                 final device = _discoveredDevices[index];
-                final isSelected = _selectedDevices.contains(device);
+                final isSelected = _selectedDeviceIds.contains(device.id);
                 return ListTile(
-                  title: Text(device),
+                  title: Text(device.name),
+                  subtitle: Text('ID: ${device.id}'),
                   trailing: Icon(
                     isSelected
                         ? Icons.check_circle
@@ -93,9 +100,9 @@ class _HostScreenState extends State<HostScreen> {
                   onTap: () {
                     setState(() {
                       if (isSelected) {
-                        _selectedDevices.remove(device);
+                        _selectedDeviceIds.remove(device.id);
                       } else {
-                        _selectedDevices.add(device);
+                        _selectedDeviceIds.add(device.id);
                       }
                     });
                   },
@@ -106,7 +113,7 @@ class _HostScreenState extends State<HostScreen> {
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: ElevatedButton(
-              onPressed: _selectedDevices.isNotEmpty ? _createRoom : null,
+              onPressed: _selectedDeviceIds.isNotEmpty ? _createRoom : null,
               child: const Text('Create Room with Selected'),
             ),
           ),

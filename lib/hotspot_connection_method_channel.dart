@@ -1,45 +1,56 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'hotspot_connection_platform_interface.dart';
+import 'models/peer.dart';
+import 'models/room_event.dart';
+import 'models/room_result.dart';
 
-/// An implementation of [HotspotConnectionPlatform] that uses method channels.
 class MethodChannelHotspotConnection extends HotspotConnectionPlatform {
-  /// The method channel used to interact with the native platform.
   @visibleForTesting
   final methodChannel = const MethodChannel('hotspot_connection');
-
-  /// The event channel for discovery events.
+  
   @visibleForTesting
-  final discoveryEventChannel = const EventChannel(
-    'hotspot_connection/discovery',
-  );
+  final discoveryEventChannel = const EventChannel('hotspot_connection/discovery');
 
-  /// The event channel for room events.
   @visibleForTesting
   final roomEventChannel = const EventChannel('hotspot_connection/room');
 
-  // Cache the streams to prevent Native EventSink cancellations when switching Flutter screens
-  late final Stream<String> _discoveryEvents = discoveryEventChannel
+  late final Stream<Peer> _discoveryEvents = discoveryEventChannel
       .receiveBroadcastStream()
-      .map((event) => event.toString());
-  late final Stream<Map<String, dynamic>> _roomEvents = roomEventChannel
+      .map((event) => Peer.fromMap(Map<dynamic, dynamic>.from(event)));
+
+  late final Stream<RoomEvent> _roomEvents = roomEventChannel
       .receiveBroadcastStream()
-      .map((event) => Map<String, dynamic>.from(event));
+      .map((event) {
+        final map = Map<String, dynamic>.from(event);
+        final type = map['type'];
+        
+        if (type == 'connected') {
+          final peerMap = map['peer'] as Map?;
+          final peer = peerMap != null ? Peer.fromMap(peerMap) : Peer(id: map['peerId'] ?? 'unknown', name: 'Unknown');
+          return PeerJoinedEvent(peer);
+        } else if (type == 'disconnected') {
+          return PeerLeftEvent(map['peerId'] ?? 'unknown');
+        } else if (type == 'message') {
+          return MessageReceivedEvent(
+             peerId: map['peerId'] ?? 'unknown',
+             message: map['data'] ?? '',
+          );
+        }
+        throw Exception('Unknown room event type: $type');
+      });
 
   @override
   Future<String?> getPlatformVersion() async {
-    final version = await methodChannel.invokeMethod<String>(
-      'getPlatformVersion',
-    );
+    final version = await methodChannel.invokeMethod<String>('getPlatformVersion');
     return version;
   }
 
   @override
-  Future<void> startBroadcasting(String username) async {
-    await methodChannel.invokeMethod('startBroadcasting', {
-      'username': username,
-    });
+  Future<void> startBroadcasting(String username, String peerId) async {
+    await methodChannel.invokeMethod('startBroadcasting', {'username': username, 'peerId': peerId});
   }
 
   @override
@@ -53,8 +64,14 @@ class MethodChannelHotspotConnection extends HotspotConnectionPlatform {
   }
 
   @override
-  Future<void> createRoom(List<String> deviceIds) async {
-    await methodChannel.invokeMethod('createRoom', {'deviceIds': deviceIds});
+  Future<RoomResult> createRoom(List<String> deviceIds) async {
+    final result = await methodChannel.invokeMethod('createRoom', {'deviceIds': deviceIds});
+    final map = Map<String, dynamic>.from(result ?? {});
+    
+    final connected = (map['connected'] as List?)?.map((e) => Peer.fromMap(e)).toList() ?? [];
+    final failed = (map['failed'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    
+    return RoomResult(connectedPeers: connected, failedPeerIds: failed);
   }
 
   @override
@@ -63,8 +80,8 @@ class MethodChannelHotspotConnection extends HotspotConnectionPlatform {
   }
 
   @override
-  Stream<String> get discoveryEvents => _discoveryEvents;
+  Stream<Peer> get discoveryEvents => _discoveryEvents;
 
   @override
-  Stream<Map<String, dynamic>> get roomEvents => _roomEvents;
+  Stream<RoomEvent> get roomEvents => _roomEvents;
 }

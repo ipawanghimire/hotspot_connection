@@ -21,25 +21,21 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _msgController = TextEditingController();
   final List<String> _messages = [];
-  StreamSubscription? _roomSub;
+  StreamSubscription<RoomEvent>? _roomSub;
 
   @override
   void initState() {
     super.initState();
     _roomSub = widget.plugin.roomEvents.listen((event) {
-      if (event['type'] == 'message') {
-        setState(() {
-          _messages.add(event['data']);
-        });
-      } else if (event['type'] == 'disconnected') {
-        setState(() {
-          _messages.add('--- A user disconnected ---');
-        });
-      } else if (event['type'] == 'connected') {
-        setState(() {
-          _messages.add('--- A user joined ---');
-        });
-      }
+      setState(() {
+        if (event is MessageReceivedEvent) {
+          _messages.add(event.message);
+        } else if (event is PeerLeftEvent) {
+          _messages.add('--- ${event.peerId} disconnected ---');
+        } else if (event is PeerJoinedEvent) {
+          _messages.add('--- ${event.peer.name} joined ---');
+        }
+      });
     });
   }
 

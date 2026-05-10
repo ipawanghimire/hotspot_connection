@@ -1,6 +1,6 @@
 name: hotspot_connection
 description: "A Flutter plugin for local network peer-to-peer (P2P) discovery and TCP socket communication using native Android NSD and iOS Bonjour."
-version: 0.0.1
+version: 1.0.0
 repository: https://github.com/ipawanghimire/hotspot_connection
 
 environment:

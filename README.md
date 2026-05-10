@@ -9,6 +9,7 @@ A Flutter plugin for local network peer-to-peer (P2P) discovery and communicatio
 - **Create P2P Rooms**: Host a session and connect with multiple selected devices.
 - **Real-time Messaging**: Send and receive text payloads natively across connected TCP sockets.
 - **Cross-Platform**: Supports both Android and iOS with native APIs.
+- **Strongly Typed**: Clean, strongly-typed domain models matching the underlying native platform responses.
 
 ## Platform Setup
 
@@ -54,8 +55,8 @@ await hotspot.startBroadcasting("John Doe");
 
 // Listen for connection events when the host creates the room
 hotspot.roomEvents.listen((event) {
-  if (event['type'] == 'connected') {
-    print("Joined the room!");
+  if (event is PeerJoinedEvent) {
+    print("Joined the room! Connected to: ${event.peer.name}");
   }
 });
 ```
@@ -67,33 +68,41 @@ Start looking for broadcasting devices:
 ```dart
 await hotspot.startDiscovery();
 
-// Listen to the discovery stream to see devices as they are found
-hotspot.discoveryEvents.listen((device) {
-  print("Found device: $device");
+// Listen to the discovery stream to see devices (Peer objects) as they are found
+hotspot.discoveryEvents.listen((Peer device) {
+  print("Found device: ${device.name} (ID: ${device.id})");
 });
 ```
 
 ### 4. Host: Create a Room
 
-Once you have collected the names of the discovered devices, select the ones you want to connect to:
+Once you have collected the IDs of the discovered devices, select the ones you want to connect to:
 
 ```dart
 await hotspot.stopDiscovery(); // Good practice to stop scanning before connecting
-await hotspot.createRoom(["John Doe", "Jane Smith"]);
+final result = await hotspot.createRoom(["uuid-device-1", "uuid-device-2"]);
+
+if (result.isSuccess) {
+  print("Room created successfully!");
+} else {
+  print("Failed to connect to: ${result.failedConnections}");
+}
 ```
 
 ### 5. Send and Receive Messages
 
-Once connected, both Host and Joiners can listen to and send messages:
+Once connected, both Host and Joiners can listen to and send messages using the typed event stream:
 
 **Listen for messages:**
 
 ```dart
 hotspot.roomEvents.listen((event) {
-  if (event['type'] == 'message') {
-    print("Received: ${event['data']}");
-  } else if (event['type'] == 'disconnected') {
-    print("A user disconnected.");
+  if (event is MessageReceivedEvent) {
+    print("Received from ${event.peerId}: ${event.message}");
+  } else if (event is PeerLeftEvent) {
+    print("User ${event.peerId} disconnected.");
+  } else if (event is PeerJoinedEvent) {
+    print("User ${event.peer.name} joined.");
   }
 });
 ```
@@ -106,7 +115,7 @@ await hotspot.sendMessage("Hello everyone!");
 
 ## Example
 
-Check the `example/` folder for a complete working chat application implementing host and join features.
+Check the `example/` folder for a complete working chat application implementing host and join features using the strongly typed system.
 
 ### Screenshots
 
